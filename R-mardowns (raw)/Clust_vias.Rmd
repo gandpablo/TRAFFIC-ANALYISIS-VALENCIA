@@ -1,0 +1,583 @@
+---
+title: "Generalizar_zonas"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r}
+library(readr)
+library(jsonlite)
+library(dplyr)
+library(leaflet)
+library(sf)
+library(tidyr)
+library(purrr)
+library(tibble)
+library(cluster)
+library(factoextra)
+library(RColorBrewer)
+library(gridExtra)
+library(geosphere)
+library(lubridate)
+library(patchwork)
+```
+
+
+# Que se va a hacer
+
+La idea de este apartado es generalizar las zonas para facilitar el cruce, a cada estación de contaminación habrá que asignarle una zona de trafico que le afecta, obviamente en base a las distancias.
+
+Además como idea, en las distribuciones de tráfico habiamos apreciado diferentes tipos de comportamientos, segun aumentaba o disminuia la ocupación, podría ser una buena práctica caracterizar aqui las diferntes vías (según su tipo o descripción) para tenerlas diferencidas a la hora de combinarlas con contaminación
+
+Aquí veremos como se segmentará el tráfico.
+
+```{r}
+
+trafico <- read_csv('/Users/pablogandia/Desktop/zonas_bien.csv')
+head(trafico)
+
+contaminantes <- read_csv("/Users/pablogandia/Desktop/Analisis_aire/data/raw/geoespacial/estaciones_valencia.csv") %>%
+  select(Estación, Latitud, Longitud, Altitud)
+
+head(contaminantes)
+
+postales <- fromJSON("/Users/pablogandia/Desktop/BASES TRAFICO/coordenadas.json")
+```
+Ahora seleccionamos únicamente las zonas en las que se ha realizado la combinación general para el datset de contaminantes:
+
+```{r}
+zonas <- c("Massanassa_UM", "Quart de Poblet", "Sedaví UM",
+           "Torrent-El Vedat", "València - Av. França",
+           "València - Molí del Sol", "València - Pista de Silla",
+           "València - Politècnic", "València Port llit antic Túria",
+           "València Port Moll Trans. Ponent")
+
+contaminantes <- contaminantes[contaminantes$Estación %in% zonas, ]
+```
+
+# Selección de estaciones de contaminantes:
+
+
+```{r}
+mean_lat <- mean(trafico$Lat, na.rm = TRUE)
+mean_lon <- mean(trafico$Lon, na.rm = TRUE)
+
+m <- leaflet() %>%
+  addTiles() %>%
+  setView(lng = mean_lon, lat = mean_lat, zoom = 11)
+
+m <- m %>%
+  addCircleMarkers(data = trafico,
+                   lng = ~Lon, lat = ~Lat,
+                   radius = 4, color = "blue", fillOpacity = 0.6,
+                   popup = ~as.character(nombre))
+
+m <- m %>%
+  addLegend(position = "bottomright",
+            colors = c("blue", "red"),
+            labels = c("Zonas de tráfico", "Estaciones de contaminantes"),
+            title = "Tipos de estación",
+            opacity = 0.7)
+
+m <- m %>%
+  addCircleMarkers(data = contaminantes,
+                   lng = ~Longitud, lat = ~Latitud,
+                   radius = 6, color = "red", fillOpacity = 0.7,
+                   popup = ~as.character(Estación))
+
+m
+```
+
+Nos quedamos únicamente con las que están en las zonas en las que se monitoriza el tráfico.
+
+```{r}
+fuera <- c("Quart de Poblet", "Massanassa_UM", "Paterna - CEAM", "Sedaví UM", "Torrent-El Vedat")
+contaminantes <- contaminantes[!contaminantes$Estación %in% fuera, ]
+```
+
+```{r}
+nrow(contaminantes)
+```
+
+# VER ZONAS DE CONTAMINANTES:
+
+```{r}
+
+añadir_leyenda <- function(mapa) {
+  mapa %>% addLegend(
+    position = "bottomright",
+    colors = c("#dfeef7", "blue"),
+    labels = c("Zonas postales", "Estaciones de contaminantes"),
+    title = "Elementos del mapa",
+    opacity = 0.7
+  )
+}
+
+crear_poligono <- function(cp, coords) {
+  df <- as.data.frame(coords)
+  df$lat <- as.numeric(df$lat)
+  df$log <- as.numeric(df$log)
+
+  if (nrow(df) < 3) return(NULL)
+
+  if (!(df[1, "lat"] == df[nrow(df), "lat"] &&
+        df[1, "log"] == df[nrow(df), "log"])) {
+    df <- rbind(df, df[1, ])
+  }
+  
+  poligono <- st_polygon(list(as.matrix(df[, c("log", "lat")])))
+  st_sf(postal = cp, geometry = st_sfc(poligono, crs = 4326))
+}
+
+zonas_sf <- map2(names(postales), postales, crear_poligono) %>%
+  compact() %>%
+  bind_rows()
+
+contaminantes_sf <- st_as_sf(contaminantes, coords = c("Longitud", "Latitud"), crs = 4326)
+
+mean_lat <- mean(contaminantes$Latitud, na.rm = TRUE)
+mean_lon <- mean(contaminantes$Longitud, na.rm = TRUE)
+
+m <- leaflet() %>%
+  addTiles() %>%
+  setView(lng = mean_lon, lat = mean_lat, zoom = 11) %>%
+
+  addPolygons(data = zonas_sf,
+              fillColor = "#dfeef7",
+              color = "#8b0000",
+              weight = 2,
+              fillOpacity = 0.4,
+              label = ~postal) %>%
+
+  addCircleMarkers(data = contaminantes_sf,
+                   radius = 6,
+                   color = "blue",
+                   fill = TRUE,
+                   fillOpacity = 0.7,
+                   popup = ~Estación)
+
+m <- añadir_leyenda(m)
+m
+
+```
+
+
+Aquí podemos observar las unicas 6 zonas que hemos seleccionada al final, que son:
+
+-València - Molí del Sol
+-València - Pista de Silla
+-València - Av. França
+-València Port llit antic Túria
+-València Port Moll Trans. Ponen
+-València - Politècnic
+
+
+# Clustering de Zonas de tráfico por sus coordenadas
+
+La idea aquí, como buscamos asignar espiras de tráfico a cada estación de contaminantes para posibilitar el cruzado de datos entre tráfico y contaminación, queremos encontrar alguna característica que diferencie a las espiras entre ellas, y que pueda servir para ser asignada a una estación de contaminación.
+
+El primer clustering lo haremos por sus coordenadas, diferenciandolos segun su posición en el plano, para poder asignar cada cluster a una estación.
+
+```{r}
+trafico_coords <- trafico[, c("Lon", "Lat")]
+trafico_coords <- as.data.frame(trafico_coords)
+rownames(trafico_coords) <- trafico$idpm
+
+set.seed(123)
+p1 <- fviz_nbclust(trafico_coords, kmeans, method = "silhouette") +
+  labs(title = "Número óptimo (Silhouette)")
+p2 <- fviz_nbclust(trafico_coords, kmeans, method = "wss") +
+  labs(title = "Número óptimo (Codo)")
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+```
+Seleccionamos 5 clusters ya que son los que arrojan mejores resultados
+
+```{r}
+set.seed(123)
+k_optimo <- 5
+modelo_kmeans <- kmeans(trafico_coords, centers = k_optimo)
+trafico$cluster_ubi <- as.factor(modelo_kmeans$cluster)
+```
+
+```{r}
+table(trafico$cluster_ubi)
+
+fviz_cluster(modelo_kmeans, data = trafico_coords,
+             geom = "point", ellipse.type = "convex",
+             ggtheme = theme_minimal(), main = "Dispersión de los clusters")
+```
+Podemos ver que el número de zonas de tráfico que hay en cada cluster es bastante uniforme, en cuanto a la dispersion y la situación de estos clusters en el mapa, vamos a representarlo para verlo bien:
+
+```{r}
+mapa_clusters <- function(trafico, contaminantes, columna_cluster, k, titulo = "Clusters de tráfico") {
+  
+  paleta <- brewer.pal(n = k, name = "Set1")
+  pal <- colorFactor(palette = paleta, domain = trafico[[columna_cluster]])
+  
+  icono_rojo <- awesomeIcons(
+    icon = 'square',
+    iconColor = 'white',
+    markerColor = 'red',
+    library = 'fa'
+  )
+  
+  mean_lat <- mean(trafico$Lat, na.rm = TRUE)
+  mean_lon <- mean(trafico$Lon, na.rm = TRUE)
+  
+  leaflet() %>%
+    addTiles() %>%
+    setView(lng = mean_lon, lat = mean_lat, zoom = 11) %>%
+    
+    addCircleMarkers(data = trafico,
+                     lng = ~Lon, lat = ~Lat,
+                     radius = 5,
+                     color = ~pal(trafico[[columna_cluster]]),
+                     fillOpacity = 0.8,
+                     stroke = FALSE,
+                     popup = ~paste("Zona:", nombre, "<br>Cluster:", trafico[[columna_cluster]])) %>%
+    
+    addAwesomeMarkers(data = contaminantes,
+                      lng = ~Longitud, lat = ~Latitud,
+                      icon = icono_rojo,
+                      popup = ~paste("Estación:", Estación)) %>%
+    
+    addLegend(position = "bottomright",
+              pal = pal,
+              values = trafico[[columna_cluster]],
+              title = titulo,
+              opacity = 1)
+}
+
+mapa_clusters(trafico, contaminantes, columna_cluster = "cluster_ubi", k = 4)
+```
+
+Podemos ver que por ejemplo el cluster rojo pertenece a todo lo que es la Horta Sud, y la entrada de valencia por la pista de silla, luego el cluster gris pertenece a toda la parte del puerto (nord-este), la parte verde al Norte, y la parte Oeste dividida entre el cluster morado y el verde oscuro
+
+Como no me gusta que no tenga en cuenta la distancia a la estación de contaminación mas cercana, y por ejemplo la Avenida de Francia no se vea afectada por el trafico del Pont de les Arts, que tienen bastante flujo de tráfico, vamos a valorar también la distancia a cada estación de contaminantes para seleccionar el numero de clusters.
+
+```{r}
+trafico_dist <- trafico %>%
+  select(idpm, Lat, Lon)
+
+for (i in 1:nrow(contaminantes)) {
+  nombre_estacion <- contaminantes$Estación[i]
+  coord_estacion <- as.numeric(contaminantes[i, c("Longitud", "Latitud")])
+  
+  trafico_dist[[paste0("dist_", nombre_estacion)]] <- distHaversine(
+    trafico_dist[, c("Lon", "Lat")],
+    matrix(rep(coord_estacion, nrow(trafico_dist)), ncol = 2, byrow = TRUE)
+  )
+}
+
+head(trafico_dist)
+```
+
+Ahora para cada estación de trafico tenemos su latitud, longitud y distancia a cada estación de contaminante en km.
+
+Y estudiaremos un nuevo clustering
+
+```{r}
+variables_clustering <- trafico_dist %>%
+  select(Lat,Lon,starts_with("dist_")) %>% 
+  scale()  
+
+set.seed(123)
+
+p1 <- fviz_nbclust(variables_clustering, kmeans, method = "silhouette") +
+  labs(title = "Número óptimo (Silhouette)")
+
+p2 <- fviz_nbclust(variables_clustering, kmeans, method = "wss") +
+  labs(title = "Número óptimo (Codo)")
+
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+
+```
+
+Seleccionamos 4 clusters ya que yo en el mapa veo a las zonas principalmente separadas en norte sur este y oeste:
+
+```{r}
+set.seed(123)
+modelo_kmeans <- kmeans(variables_clustering, centers = 4)
+trafico$cluster_estacion <- as.factor(modelo_kmeans$cluster)
+
+table(trafico$cluster_estacion)
+
+fviz_cluster(modelo_kmeans, data = trafico_coords,
+             geom = "point", ellipse.type = "convex",
+             ggtheme = theme_minimal(), main = "Dispersión de los clusters")
+```
+
+Vemos que el resultado es practicamente igual eligiendo 4 clusters, por lo que nos quedaremos con este último.
+Es decir, a partir de ahora vamos a segmentar el tráfico en 4 zonas, aunque solo vamos a estudiar el cluster 2,3 y 4, que son los que afectan a nuestras zonas de contaminantes.
+
+```{r}
+mapa_clusters(trafico, contaminantes, columna_cluster = "cluster_estacion", k = 4, 
+              titulo = "Clusters con contaminación")
+
+```
+
+```{r}
+distancias_por_cluster <- trafico %>%
+  group_by(cluster_estacion) %>%
+  summarise(
+    media_distancia_m = mean(distm(cbind(Lon, Lat), fun = distHaversine)[upper.tri(distm(cbind(Lon, Lat), fun = distHaversine))]),
+    max_distancia_m = max(distm(cbind(Lon, Lat), fun = distHaversine))
+  )
+
+distancias_por_cluster
+```
+
+
+# Diferenciar tipos de via
+
+Vamos a validar el clustering anterior fijandonos en el tráfico de esas zonas
+
+```{r}
+datos_vias <- read_csv('/Users/pablogandia/Desktop/trafico_horario_clean.csv') %>%
+  select(IdPM, Hora, Dia,Mes,IntensidadMediana,VelocidadMedia,OcupacionMedia,OcupacionMaxima,DevIntensidad)
+head(datos_vias)
+```
+
+```{r}
+trafico <- trafico %>%
+  left_join(datos_vias, by = c("idpm" = "IdPM"))
+
+trafico
+```
+
+Ver el cluster por distancia a estacion y ubicacion
+
+```{r}
+trafico %>%
+  group_by(cluster_estacion) %>%
+  summarise(
+    Intensidad   = mean(IntensidadMediana, na.rm = TRUE),
+    Ocupacion = mean(OcupacionMedia, na.rm = TRUE),
+    OcupacionMax = mean(OcupacionMaxima, na.rm = TRUE),
+    Velocidad    = mean(VelocidadMedia, na.rm = TRUE),
+    DevIntensidad = mean(DevIntensidad, na.rm = TRUE)
+  )
+```
+Las zonas tienen todas un tráfico muy similar, por lo que no hemos conseguido carcterizarlas correctamente como buscabamos, por lo que ahora si tendremos en cuenta las variables de tráfico para ver que resutados arrojan.
+
+
+A cada zona de trafico le asignamos sus valores medios:
+
+
+```{r}
+trafico_clust <- trafico %>%
+  group_by(idpm) %>%
+  summarise(
+    IntensidadMax    = max(IntensidadMediana, na.rm = TRUE),
+    Intensidad       = mean(IntensidadMediana, na.rm = TRUE),
+    Ocupacion        = mean(OcupacionMaxima, na.rm = TRUE),
+    OcupacionMax     = max(OcupacionMaxima, na.rm = TRUE),
+    Velocidad        = mean(VelocidadMedia, na.rm = TRUE),
+    DevIntensidad    = mean(DevIntensidad, na.rm = TRUE)
+  ) %>%
+  left_join(
+    trafico %>% select(idpm, Lat, Lon,nombre) %>% distinct(),
+    by = "idpm"
+  )
+
+```
+
+```{r}
+trafico_clust
+```
+
+```{r}
+variables_clustering <- trafico_clust %>%
+  select(Intensidad,IntensidadMax, OcupacionMax, Ocupacion,Velocidad,DevIntensidad) %>%
+  scale()
+
+set.seed(123)
+
+p1 <- fviz_nbclust(variables_clustering, kmeans, method = "silhouette") +
+  labs(title = "Número óptimo (Silhouette)")
+
+p2 <- fviz_nbclust(variables_clustering, kmeans, method = "wss") +
+  labs(title = "Número óptimo (Codo)")
+
+grid.arrange(p1, p2, nrow = 1)
+```
+Mirando los resultados con varias pruebas de número de clusters, el que más sentido cobra es este con 3 clusters (3 tipos de vias).
+
+```{r}
+k_optimo <- 3
+
+set.seed(123)
+modelo_kmeans <- kmeans(variables_clustering, centers = k_optimo)
+trafico_clust$cluster_tipo_via <- as.factor(modelo_kmeans$cluster)
+
+table(trafico_clust$cluster_tipo_via)
+```
+
+```{r}
+pal <- colorFactor(palette = brewer.pal(k_optimo, "Set1"),
+                   domain = trafico_clust$cluster_tipo_via)
+
+leaflet(trafico_clust) %>%
+  addTiles() %>%
+  setView(lng = mean(trafico_clust$Lon), lat = mean(trafico_clust$Lat), zoom = 11) %>%
+  addCircleMarkers(
+    lng = ~Lon, lat = ~Lat,
+    radius = 6,
+    color = ~pal(cluster_tipo_via),
+    fillOpacity = 0.8,
+    stroke = FALSE,
+    popup = ~paste("Zona:", idpm, "<br>Cluster:", cluster_tipo_via)
+  ) %>%
+  addLegend(position = "bottomright",
+            pal = pal,
+            values = ~cluster_tipo_via,
+            title = "Tipos de vía",
+            opacity = 1)
+
+```
+
+
+```{r}
+
+graficos_cluster <- function(data, cluster_id) {
+  df <- data %>% filter(cluster_tipo_via == cluster_id)
+  
+  p1 <- ggplot(df, aes(x = Intensidad)) +
+    geom_histogram(fill = "#E41A1C", bins = 30, alpha = 0.6) +
+    geom_histogram(aes(x = IntensidadMax), fill = "#377EB8", bins = 30, alpha = 0.4) +
+    labs(title = paste("Cluster", cluster_id, "- Intensidad media y máxima"),
+         x = "Intensidad", y = "Frecuencia") +
+    theme_minimal()
+
+  p2 <- ggplot(df, aes(x = Ocupacion)) +
+    geom_histogram(fill = "#4DAF4A", bins = 30, alpha = 0.6) +
+    labs(title = paste("Cluster", cluster_id, "- Ocupación máxima media"),
+         x = "Ocupación (%)", y = "Frecuencia") +
+    theme_minimal()
+
+  p3 <- ggplot(df, aes(x = DevIntensidad)) +
+    geom_histogram(fill = "#984EA3", bins = 30, alpha = 0.6) +
+    labs(title = paste("Cluster", cluster_id, "- Desviación intensidad"),
+         x = "Desviación", y = "Frecuencia") +
+    theme_minimal()
+
+  p4 <- ggplot(df, aes(x = Velocidad)) +
+    geom_histogram(fill = "#FF7F00", bins = 30, alpha = 0.6) +
+    labs(title = paste("Cluster", cluster_id, "- Velocidad media"),
+         x = "Velocidad (km/h)", y = "Frecuencia") +
+    theme_minimal()
+  
+  grid.arrange(p1, p2, p3, p4, ncol = 2)
+}
+
+graficos_cluster(trafico_clust, "1")
+graficos_cluster(trafico_clust, "2")
+graficos_cluster(trafico_clust, "3")
+
+tabla_medias_cluster <- trafico_clust %>%
+  group_by(cluster_tipo_via) %>%
+  summarise(
+    Intensidad_media      = mean(Intensidad, na.rm = TRUE),
+    IntensidadMax_media   = mean(IntensidadMax, na.rm = TRUE),
+    Ocupacion_media       = mean(Ocupacion, na.rm = TRUE),
+    OcupacionMax_media       = mean(OcupacionMax, na.rm = TRUE),
+    DevIntensidad_media   = mean(DevIntensidad, na.rm = TRUE),
+    Velocidad_media       = mean(Velocidad, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+tabla_medias_cluster
+```
+Diferentes Clusters:
+
+Cluster 1 (puntos rojos): Son las vías con mayor volumen de tráfico, las grandes avenidas con una intensidad máxima media de unos 3000-4000 coches por hora. Estas vías son las que potencialmente más contaminan ya que toman mayores valores de ocupación máxima (entre el 5 y 10%), velocidades de entre 30 y 40 km/h y con una desviación tipica bastante pronunciada, que indica que también a veces se experimentan picos (algunos valores de desviación típica superior a 100).
+
+Este tipo de vías son las que más nos interesan, y hay 365 en total.
+
+Cluster 2 (los puntos azules del mapa): Son vías de intensidades bajas, con velocidades también bajas (inferiores a 20), donde la ocupación es muy baja y que siempre suelen tener la misma cantiddad de trafico, ya que la varianza de su intensidad no toma valorse muy altos.
+Es decir, carreteras de barrio con poca circulación y muy poco cambiantses que tendrán un bajo potencial contaminante, un cuarto de de vias (371) son de este estilo.
+
+
+Cluster 3 (puntos verdes): Este es el peor tipo de zonas, con intensidades medias bajas pero con intensidades maximas que llegan a ser altas, aquí la velocidad es baja, pero valores de ocupación mucho mas altos que el resto de vías (gran presencia del 10% y zonas hasta con 40%). Es decir, puntos en los que se generan paradas y congestiones constantes, quizas son vías menos anchas, y en general con menos circulación, pero los coches se detienen mucho más, teniendo que detenerse y arrancar, signifiando un efecto más negativo a nivel contaminación.
+
+
+
+Una vez hemos observado esto podemos plantear diferenciar las vias a la hora de sacar medidas y estadisticos para hacer convinaciones con otras bases que expliquen factores distintos, como es el caso de contaminación.
+
+En la vida real afectará más que comience a crecer la itensidad en una zona que hemos clasificado como congestionable, que en una zona de alta intensidad, por lo que obtener medidas diferenciadas, y separar las zonas nos permitirán obtener conclusiones diferenciadas para cada tipo de vía, y así poder cuantificar el riesgo de cada una de ellas.
+
+# Comportamiento de cada tipo de Zona - Diferentes tendencias?
+
+```{r}
+trafico_clust
+
+```
+
+
+```{r}
+resultado <- datos_vias %>%
+  left_join(trafico_clust %>% select(idpm, cluster_tipo_via), 
+            by = c("IdPM" = "idpm"))
+resultado
+```
+
+```{r}
+
+resultado <- resultado %>%
+  mutate(
+    Fecha = make_date(2023, Mes, Dia),
+    Dia_Semana = wday(Fecha, week_start = 1)
+  )
+
+p_hora <- resultado %>%
+  group_by(Hora, cluster_tipo_via) %>%
+  summarise(Intensidad = mean(IntensidadMediana, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = Hora, y = Intensidad, color = cluster_tipo_via)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(title = "Intensidad Mediana por Hora", x = "Hora", y = "Intensidad Mediana") +
+  theme_minimal()
+
+p_dia <- resultado %>%
+  group_by(Dia_Semana, cluster_tipo_via) %>%
+  summarise(Intensidad = mean(IntensidadMediana, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = factor(Dia_Semana), y = Intensidad, color = cluster_tipo_via, group = cluster_tipo_via)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_x_discrete(labels = c("1"="Lun","2"="Mar","3"="Mié","4"="Jue","5"="Vie","6"="Sáb","7"="Dom")) +
+  labs(title = "Intensidad Mediana por Día de la Semana", x = "Día", y = "Intensidad Mediana") +
+  theme_minimal()
+
+p_mes <- resultado %>%
+  group_by(Mes, cluster_tipo_via) %>%
+  summarise(Intensidad = mean(IntensidadMediana, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = Mes, y = Intensidad, color = cluster_tipo_via)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +
+  labs(title = "Intensidad Mediana por Mes", x = "Mes", y = "Intensidad Mediana") +
+  theme_minimal()
+
+(p_hora / p_dia / p_mes)
+```
+
+El comportamiento de intensidad es bastante similar, lo único que las vias de baja intensidad y congestionables, al no tener valores tan altos no se aprecían sus variaciones, pero es muy probable que al realizar analisis del tipo PCA todos los tipos de vía se acumulen de forma exagerada en una sola componente, ya que su comporamiento es el mismo, unicamente cambia sus magnitudes.
+
+
+
+
+

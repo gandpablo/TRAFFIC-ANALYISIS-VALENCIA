@@ -1,0 +1,672 @@
+---
+title: "3_1_3Distribuciones"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    df_print: paged
+---
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(patchwork)
+library(RColorBrewer)
+library(readr)
+library(viridis)
+library(tidyr)  
+library(scales) 
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+# Atípicos
+
+Primeramente desglosaremos toda la presencia de valores atípicos para después poder analizar comportamientos y tendencias del tráfico en general.
+
+```{r}
+medidas <- read_csv("/Users/pablogandia/Desktop/medidas_raw.csv")
+
+medidas <- medidas %>%
+  mutate(
+    FechaHora = make_datetime(
+      year = 2023,
+      month = Mes,
+      day = Dia,
+      hour = Hora
+    )
+  )
+
+head(medidas)
+```
+
+## Intensidad 
+
+Vamos a empezar con intensidad, ya que como habiamos visto antes, a pesar de haber utilizado mediana, su comportamiento es muy extraño.
+
+Primero ordenamos para ver valores extraños a ojo
+
+```{r}
+medidas <- medidas %>%
+  arrange(desc(IntensidadMediana))
+
+medidas
+```
+
+```{r}
+arc <- medidas %>%
+  filter(IdPM == 2524, Mes == 9, Dia == 2)
+
+ggplot(arc, aes(x = FechaHora, y = IntensidadMediana)) +
+  geom_line(linewidth = 1.2, color = "blue") +
+  geom_point(size = 1.5, color = "red") +
+  labs(
+    title = "Intensidad sospechosa 2524",
+    x = "Fecha y hora",
+    y = "Intensidad"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+A pesar de haber aplicado medianas, esta hora por ejemplo es bastante sospechosa, y esque 4000 coches en una hora me parece una exageración, y mas cuano las horas anteriores y posteriores se encuentran con intenisidaddes inferiores a 500.
+Es decir, puede que sigan habiendo valores erroneos que pueden influir mucho en el futuro cruce con contaminación.
+
+Lo que hacemos a continuación es obtener una tabla con resumenes como el umbral (diferencias entre medias y desviaciones típicas) para luego comprobar si el valor se excede de ahi, y tambien la media entre el dato anterior y posterior, ya que puede representar muy significativo.
+
+```{r}
+medidas2 <- medidas %>%
+  select(IdPM, Hora, Dia, Mes, FechaHora, IntensidadMediana, FalloIntensidad)
+
+medidas2 <- medidas2 %>%
+  arrange(IdPM, FechaHora)
+
+stats_horas <- medidas2 %>%
+  group_by(IdPM, Hora) %>%
+  summarise(
+    media = mean(IntensidadMediana, na.rm = TRUE),
+    std = sd(IntensidadMediana, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+medidas2 <- medidas2 %>%
+  left_join(stats_horas, by = c("IdPM", "Hora"))
+
+medidas2 <- medidas2 %>%
+  mutate(
+    Umbral = media + 2 * std,
+    UmbralBajo = media - 2 * std,
+    Intensidad_Ant = lag(IntensidadMediana),
+    Intensidad_Post = lead(IntensidadMediana),
+    Interv = (Intensidad_Ant + Intensidad_Post) / 2
+  )
+
+medidas2
+```
+
+Ahora filtramos para datos que se excedan del umbral y que ademas disten de la media entre el anterior y posterior más de de 3.5 desviaciones típicas (en el contexto de la intesidad de tráfico esto es mucho)
+
+```{r}
+a <- medidas2 %>%
+  filter(
+    IntensidadMediana > Umbral,
+    IntensidadMediana > (Interv + 3.5 * std)
+  )
+
+a
+```
+
+En efecto, vemos que hay muchos casos de datos muy muy extraños, que encima ocurren a horas de la madrugada casi imposibles.
+
+```{r}
+a %>%
+  count(IdPM, sort = TRUE)
+
+a %>%
+  count(Hora, sort = TRUE)
+```
+Vemos que hay zonas dond oucurre varias veces y sobretodo que el efecto se da a altas horas de la noche.
+
+Vamos a graficar estas zonas (con mas de 20 casos) a ver si encontramos algun patron:
+
+```{r}
+library(leaflet)
+
+ubis <- read_csv("/Users/pablogandia/Desktop/zonas_bien.csv")
+
+vals <- a %>%
+  count(IdPM) %>%
+  filter(n > 20) %>%
+  pull(IdPM)
+
+ubis_raras <- ubis %>%
+  filter(idpm %in% vals)
+
+lat_c <- mean(ubis_raras$Lat, na.rm = TRUE)
+lon_c <- mean(ubis_raras$Lon, na.rm = TRUE)
+
+m <- leaflet(ubis_raras) %>%
+  addTiles() %>%
+  setView(lng = lon_c, lat = lat_c, zoom = 6) %>%
+  addMarkers(
+    lng = ~Lon,
+    lat = ~Lat,
+    popup = ~paste0("<b>", nombre, "</b><br>idpm: ", idpm),
+    label = ~nombre
+  )
+
+m
+
+```
+
+Vemos que se reparten por valencia en las principales avenidas, pero sin ningún patron visible significativo.
+
+Lo mismo hacemos ahora para valores bajos:
+
+```{r}
+b <- medidas2 %>%
+  filter(
+    IntensidadMediana < UmbralBajo,
+    IntensidadMediana < (Interv - 3.5 * std)
+  )
+
+b %>%
+  count(IdPM, sort = TRUE)
+
+b %>%
+  count(Hora, sort = TRUE)
+```
+Se vuelve a repetir que se da en horas nocturnas, aunque la cantidad de zonas comunes en cuanto a estos valores no es tan grande como en valores altos.
+
+
+```{r}
+b <- medidas2 %>%
+  filter(
+    IntensidadMediana < UmbralBajo,
+    IntensidadMediana < (Interv - 5 * std)
+  )
+
+b %>%
+  count(IdPM, sort = TRUE)
+
+b %>%
+  count(Hora, sort = TRUE)
+```
+
+Vemos que esto también ocurre para intesidades bajas, para datos también nocturnos, donde imaginamos que las espiras fallan mas.
+
+Lo que hacemos es susituir el valor que se excede tanto del umbral como del intervalo entre el anterior y el posterior, y que además a sufrido un fallo en la medición, por su su valor intermedio (entre anterior y posterior), sumando 1.5 desviaciones tipicas para mantener varianza.
+
+```{r}
+cond <- with(medidas2,
+             IntensidadMediana > Umbral &
+             IntensidadMediana > (Interv + 3.5 * std) &
+             FalloIntensidad == TRUE)
+
+medidas$IntensidadMediana[cond] <- medidas2$Interv[cond] + 1.5 * medidas2$std[cond]
+
+cond2 <- with(medidas2,
+              IntensidadMediana > Umbral &
+              IntensidadMediana > (Interv + 3.5 * std) &
+              Hora < 9 &
+              FalloIntensidad == TRUE)
+
+medidas$IntensidadMediana[cond2] <- medidas2$Interv[cond2] - 1.5 * medidas2$std[cond2]
+
+```
+Lo mismo hacemos con los datos bajos
+
+
+```{r}
+boxplot(medidas$IntensidadMediana, vertical = TRUE)
+
+```
+
+Siugen existiendo muchos atípicos, pero por la simple naturaleza horaria de los datos.
+
+# Velocidad
+
+Realizamos los mismos analisis con velocidad
+
+```{r}
+medidas3 <- medidas %>%
+  select(IdPM, Hora, Dia, Mes, FechaHora, VelocidadMedia, FalloVelocidad)
+
+medidas3 <- medidas3 %>%
+  arrange(IdPM, FechaHora)
+
+stats_horas <- medidas3 %>%
+  group_by(IdPM) %>%
+  summarise(
+    media = mean(VelocidadMedia, na.rm = TRUE),
+    std = sd(VelocidadMedia, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+medidas3 <- medidas3 %>%
+  left_join(stats_horas, by = "IdPM") %>%
+  group_by(IdPM) %>%
+  mutate(
+    Umbral = media + 2.5 * std,
+    UmbralBajo = media - 2.5 * std,
+    VelocidadMedia_Ant = lag(VelocidadMedia),
+    VelocidadMedia_Post = lead(VelocidadMedia),
+    Interv = (VelocidadMedia_Ant + VelocidadMedia_Post) / 2
+  ) %>%
+  ungroup()
+
+medidas3
+```
+
+```{r}
+a <- medidas3 %>%
+  filter(
+    VelocidadMedia > Umbral,
+    VelocidadMedia > (Interv + 2.5 * std)
+  )
+a
+```
+
+Con la velocidad vamos a ser más exigentes, ya que las carreteras están limitadas, y no tendría sentido que un oche circule a 70 por una via de 30 (y menos como media horaria)
+
+```{r}
+c <- medidas3 %>%
+  filter(
+    VelocidadMedia > Umbral,
+    FalloVelocidad == TRUE
+  )
+
+c %>%
+  count(IdPM, sort = TRUE)
+
+c %>%
+  count(Hora, sort = TRUE)
+
+```
+
+
+```{r}
+cond1 <- with(medidas3,
+              VelocidadMedia > 100 &
+              VelocidadMedia > (Interv + 1.5 * std))
+
+medidas$VelocidadMedia[cond1] <- medidas3$Interv[cond1] + 1.5 * medidas3$std[cond1]
+
+cond2 <- with(medidas3,
+              FalloVelocidad == TRUE &
+              VelocidadMedia > Umbral)
+
+medidas$VelocidadMedia[cond2] <- medidas3$Interv[cond2]
+
+```
+
+Hacemos las situtuciones por solo 1.5 desviaciones tipicas
+
+# Ocupacion
+
+```{r}
+medidas4 <- medidas %>%
+  select(IdPM, Hora, Dia, Mes, FechaHora, OcupacionMedia, FalloOcupacion) %>%
+  arrange(IdPM, FechaHora)
+
+stats_ocup <- medidas4 %>%
+  group_by(IdPM) %>%
+  summarise(
+    media = mean(OcupacionMedia, na.rm = TRUE),
+    std = sd(OcupacionMedia, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+medidas4 <- medidas4 %>%
+  left_join(stats_ocup, by = "IdPM") %>%
+  group_by(IdPM) %>%
+  mutate(
+    Umbral = media + 2.5 * std,
+    UmbralBajo = media - 2.5 * std,
+    OcupacionMedia_Ant = lag(OcupacionMedia),
+    OcupacionMedia_Post = lead(OcupacionMedia),
+    Interv = (OcupacionMedia_Ant + OcupacionMedia_Post) / 2
+  ) %>%
+  ungroup()
+
+medidas4
+```
+
+```{r}
+a <- medidas4 %>%
+  filter(
+    media > Umbral,
+    media > (Interv + 1.5 * std)
+  )
+
+a %>%
+  count(IdPM, sort = TRUE)
+
+a %>%
+  count(Hora, sort = TRUE)
+```
+Ocupacion no tiene valores muy atipicos.
+
+# Distribuciones
+
+Este punto es bastante importante ya que explica el comportamiento del trafico en la ciudad de Valencia, que es lo que buscamos caracterizar y entender,
+
+## Intensidad
+
+```{r}
+ggplot(medidas, aes(x = IntensidadMediana)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  labs(title = "Distribución de Intensidad",
+       x = "Intensidad (vehículos/hora)",
+       y = "Frecuencia") +
+  theme_minimal(base_size = 13)
+```
+
+
+
+Apreciamos gran asimetria, una larga cola de la derecha, y esque como de noche no hay trafico, la gran mayoria de vias tienen estos datos al menos la mitad del dia, por lo que por eso aparece tanto desnormalizando la distribución.
+
+### Horaria
+
+```{r}
+media_por_hora <- medidas %>%
+  group_by(Hora) %>%
+  summarise(IntensidadMedia = mean(IntensidadMediana, na.rm = TRUE))
+
+ggplot(media_por_hora, aes(x = Hora, y = IntensidadMedia)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(color = "darkblue", size = 2) +
+  labs(title = "Media de Intensidad por Hora",
+       x = "Hora del Día",
+       y = "Intensidad Media") +
+  scale_x_continuous(breaks = 0:23) +
+  theme_minimal()
+```
+
+
+Vemos que principalmente hay mas tráfico entre las 7 y las 8 cuando la gente va a trabajar, luego hay una caida entre las horas medias de la mañana, hasta que entre la 1 y las 2 la gente empieza a salir del trabajo alcanzandose los 600 coches por hora, y finalmente entre las 17 y las 19 es cuando mas intensidad de vehiculos circulando se produce al dia. 
+
+A partir de las 21 se produce un claro descenso de la circulación, y esque durante las horas mas profundas de la noche, entre la 1 y las 5 de la mañana, practicamente no circulan vehiculos.
+
+Veamos un ejemplo de una zona específica, entre Avenida dels Tarongers y Camí de la Vera, justo enfrente de la Facultad de Informática
+
+```{r}
+media_1218 <- medidas %>%
+  filter(IdPM == 2046) %>%
+  group_by(Hora) %>%
+  summarise(IntensidadMedia = mean(IntensidadMediana, na.rm = TRUE))
+
+ggplot(media_1218, aes(x = Hora, y = IntensidadMedia)) +
+  geom_line(color = "firebrick", size = 1) +
+  geom_point(color = "black", size = 2) +
+  labs(title = "Media de Intensidad por Hora en Zona Tarongers",
+       x = "Hora del Día",
+       y = "Intensidad Media") +
+  scale_x_continuous(breaks = 0:23) +
+  theme_minimal()
+```
+Por ejemplo esto como es una zona más escolar, no hay tanto tráfico entre las 7 y las 9 como ocurre con la media de zonas.
+Aunque si que vemos que los valores son muchisimo más altos, de más de 2000 coches cada hora en hora punta, ya que es una gran avenida.
+
+```{r}
+medidas <- medidas %>%
+  mutate(Fecha = make_date(Año, Mes, Dia),
+         Dia_Semana = wday(Fecha, label = FALSE, week_start = 1))  # 1 = lunes
+
+media_diasem <- medidas %>%
+  group_by(Dia_Semana) %>%
+  summarise(IntensidadMedia = mean(IntensidadMediana, na.rm = TRUE), .groups = "drop")
+
+p1 <- ggplot(media_diasem, aes(x = factor(Dia_Semana), y = IntensidadMedia)) +
+  geom_col(fill = "skyblue") +
+  labs(title = "Media por Día de la Semana", x = "Día de la Semana", y = "Intensidad Mediana") +
+  scale_x_discrete(labels = c("1" = "Lun", "2" = "Mar", "3" = "Mié", "4" = "Jue",
+                              "5" = "Vie", "6" = "Sáb", "7" = "Dom")) +
+  theme_minimal()
+
+media_hora_dia <- medidas %>%
+  group_by(Dia_Semana, Hora) %>%
+  summarise(IntensidadMedia = mean(IntensidadMediana, na.rm = TRUE), .groups = "drop")
+
+p2 <- ggplot(media_hora_dia, aes(x = Hora, y = IntensidadMedia, color = factor(Dia_Semana))) +
+  geom_line(size = 1) +
+  geom_point(size = 1.5) +
+  labs(title = "Media por Hora según Día de la Semana",
+       x = "Hora del Día", y = "Intensidad Mediana", color = "Día") +
+  scale_color_manual(values = brewer.pal(7, "Set1"),
+                     labels = c("1" = "Lun", "2" = "Mar", "3" = "Mié", "4" = "Jue",
+                                "5" = "Vie", "6" = "Sáb", "7" = "Dom")) +
+  scale_x_continuous(breaks = 0:23) +
+  theme_minimal()
+
+p1 + p2
+
+```
+
+Vemos que los sabados y odmingos la intensidad baja bastante respecto al resto de la semana, como no hay actividad ni laboral ni lectiva la gente no tiene que desplazarse y evitan coger el coche. No obstante el comportamiento del tráfico a lo largo del dia es similar en todos, aunque con menores volumenes.
+
+### Mensual
+
+```{r}
+media_mensual <- medidas %>%
+  group_by(Mes) %>%
+  summarise(IntensidadMedia = mean(IntensidadMediana, na.rm = TRUE), .groups = "drop")
+
+ggplot(media_mensual, aes(x = Mes, y = IntensidadMedia)) +
+  geom_line(color = "steelblue", size = 1.5) +
+  geom_point(color = "darkblue", size = 3) +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +
+  labs(title = "Media de Intensidad por Mes",
+       x = "Mes", y = "Intensidad Mediana") +
+  theme_minimal()
+
+```
+
+Vemos un comportamiento basatante peculiar del trafico según el més. 
+Cuando más tráfico hay son los meses laborales, de enero a marzo, en abril por la semana santa el tráfico disminuye.
+Luego de Mayo a Julio es cuando presenta mayor intensidad media de trafico, hasta que en Agosto, ya que es cuando la mayor parte de los trabjadores y alumnos tienen vacacioens, el tráfico es bastante menor que el resto. 
+
+De Septiembre a Diciembre se mantiene alrededor de los 400, con un ligero descenso en diciembre.
+
+
+## Ocupacion
+
+```{r}
+p1 <- ggplot(medidas, aes(x = OcupacionMedia)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  labs(title = "Distribución de Ocupación Media",
+       x = "Ocupación Media (%)",
+       y = "Frecuencia") +
+  theme_minimal(base_size = 13)
+
+p2 <- ggplot(medidas, aes(x = OcupacionMax)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  labs(title = "Distribución de Ocupación Máxima",
+       x = "Ocupación Máxima (%)",
+       y = "Frecuencia") +
+  theme_minimal(base_size = 13)
+
+p1 + p2
+```
+
+
+La enorme mayoría de los valores son 0, incluso fijandonos en la ocupación máxima. Lo que indica que en las zonas que se monitoriza hay gran fluidez, aunque alguanas estacioens si presenten valores de ocupación más altos en algunos puntos del dia específicos.
+
+```{r}
+media_ocupaciones <- medidas %>%
+  group_by(Hora) %>%
+  summarise(
+    OcupacionMedia = mean(OcupacionMedia, na.rm = TRUE),
+    OcupacionMaxMedia = mean(OcupacionMax, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(media_ocupaciones, aes(x = Hora)) +
+  geom_line(aes(y = OcupacionMedia, color = "Ocupación Media"), size = 1.2) +
+  geom_point(aes(y = OcupacionMedia, color = "Ocupación Media"), size = 2) +
+  geom_line(aes(y = OcupacionMaxMedia, color = "Ocupación Máxima"), size = 1.2) +
+  geom_point(aes(y = OcupacionMaxMedia, color = "Ocupación Máxima"), size = 2) +
+  scale_color_manual(values = c("Ocupación Media" = "orange", "Ocupación Máxima" = "steelblue")) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(title = "Ocupación Media y Máxima por Hora del Día",
+       x = "Hora del Día", y = "Porcentaje de Ocupación (%)", color = "Leyenda") +
+  theme_minimal()
+
+```
+
+Vemos que la ocupación se distribuye prácticamente igual que la intensidad.
+La ocupación maxima y media básicamente reprensetan lo mismo solo son con valores bastante menos pronunciados.
+
+### Distribución de Ocupacion e Intensidad
+
+```{r}
+medidas <- medidas %>%
+  mutate(
+    Fecha = make_date(Año, Mes, Dia),
+    Dia_Semana = wday(Fecha, week_start = 1)  # 1 = lunes
+  )
+
+medidas <- medidas %>%
+  mutate(
+    IntensidadNorm = scale(IntensidadMediana)[,1],
+    OcupacionNorm = scale(OcupacionMedia)[,1]
+  )
+
+media_hora <- medidas %>%
+  group_by(Hora) %>%
+  summarise(
+    Intensidad = mean(IntensidadNorm, na.rm = TRUE),
+    Ocupacion = mean(OcupacionNorm, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(-Hora, names_to = "Variable", values_to = "Valor")
+
+p_hora <- ggplot(media_hora, aes(x = Hora, y = Valor, color = Variable)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("Intensidad" = "darkred", "Ocupacion" = "darkblue")) +
+  labs(title = "Patrones Normalizados por Hora", x = "Hora", y = "Valor Normalizado") +
+  theme_minimal()
+
+media_dia <- medidas %>%
+  group_by(Dia_Semana) %>%
+  summarise(
+    Intensidad = mean(IntensidadNorm, na.rm = TRUE),
+    Ocupacion = mean(OcupacionNorm, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(-Dia_Semana, names_to = "Variable", values_to = "Valor")
+
+p_dia <- ggplot(media_dia, aes(x = factor(Dia_Semana), y = Valor, color = Variable)) +
+  geom_line(group = 1, size = 1.2) +
+  geom_point(size = 2) +
+  scale_x_discrete(labels = c("1"="Lun","2"="Mar","3"="Mié","4"="Jue","5"="Vie","6"="Sáb","7"="Dom")) +
+  scale_color_manual(values = c("Intensidad" = "darkred", "Ocupacion" = "darkblue")) +
+  labs(title = "Patrones Normalizados por Día de la Semana", x = "Día", y = "Valor Normalizado") +
+  theme_minimal()
+
+media_mes <- medidas %>%
+  group_by(Mes) %>%
+  summarise(
+    Intensidad = mean(IntensidadNorm, na.rm = TRUE),
+    Ocupacion = mean(OcupacionNorm, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(-Mes, names_to = "Variable", values_to = "Valor")
+
+p_mes <- ggplot(media_mes, aes(x = Mes, y = Valor, color = Variable)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +
+  scale_color_manual(values = c("Intensidad" = "darkred", "Ocupacion" = "darkblue")) +
+  labs(title = "Patrones Normalizados por Mes", x = "Mes", y = "Valor Normalizado") +
+  theme_minimal()
+
+p_hora / p_dia / p_mes
+
+
+```
+
+Vemos que siguen completamente los mismos patrones, por lo que a la hora de explicar otros factores, como por ejemplo contaminación, si generalizamos mucho probablemente perdamos cualquier tipo de aportación individual de cada variable a la varianza general del estudio, ya que serán prácticamente la misma componente.
+
+### En general
+
+```{r}
+p1 <- ggplot(medidas, aes(x = OcupacionMedia, y = IntensidadMediana)) +
+  geom_bin2d(bins = 2000) +
+  scale_fill_viridis_c() +
+  coord_cartesian(xlim = c(0, 100), ylim = c(0, 6000)) +
+  labs(title = "Ocupación Media vs Intensidad Mediana",
+       x = "Ocupación Media (%)", y = "Intensidad Mediana") +
+  theme_minimal()
+
+p2 <- ggplot(medidas, aes(x = OcupacionMedia, y = VelocidadMedia)) +
+  geom_bin2d(bins = 2000) +
+  scale_fill_viridis_c() +
+  coord_cartesian(xlim = c(0, 100), ylim = c(0, 120)) +
+  labs(title = "Ocupación Media vs Velocidad Media",
+       x = "Ocupación Media (%)", y = "Velocidad Media (km/h)") +
+  theme_minimal()
+
+p1 + p2
+```
+
+Podemos ver que en principio valores muy bajos de ocupacion, los que son casi 0, toman valores relativamente bajos de intensidad, pero luego cuanta más ocupación la intensidad crece, aunque no indefinidamente, los valores muy altos de ocupación, los superiores al 50%, que se da cuando la via esta muy saturada, la intensidad presenta valores más bajos, ya que los coches no están en movimiento, es decir, hay un atasco.
+
+En cuanto a velocidad se ve claramente como a valores altos de ocupación, superiores al 25%, la velocidad desciende drásticamente, también vemos como los valors altos de velocidad, en zonas de mucha fluidez, alcanzando valores de 75 km/h, solo se dan cuando la oucpación es prácticamente nula.
+Aunque obviamente aquí se da el factor que, cuando no hay ocupación porque no pasan coches, como ocurre entre la 1 y las 5 de la mañana, la velocidad también será 0, por lo que la relación tampoco es del todo lineal
+
+# Velocidad
+
+```{r}
+p1 <- ggplot(medidas, aes(x = VelocidadMedia)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "white") +
+  labs(title = "Distribución General de Velocidad",
+       x = "Velocidad Media (km/h)",
+       y = "Frecuencia") +
+  theme_minimal()
+
+filtrados <- medidas %>%
+  filter(Hora >= 9 & Hora <= 21)
+
+p2 <- ggplot(filtrados, aes(x = VelocidadMedia)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "white") +
+  labs(title = "Velocidad Media en Horario de Circulación",
+       x = "Velocidad Media (km/h)",
+       y = "Frecuencia") +
+  theme_minimal()
+
+p1 + p2
+```
+
+Esta mucho mejor distribuida, las velocidades están limitadas, en cambio la cantidad de coches que circulan por un lugar no.
+
+Vemos que hay mucho en 0 por lo que hemos explicado en el punto anterior, la mayoria de zonas no pasan de 50 km/h ya que es en el interior de la ciudad.
+
+```{r}
+vel_hora <- medidas %>%
+  group_by(Hora) %>%
+  summarise(MediaVelocidad = mean(VelocidadMedia, na.rm = TRUE), .groups = "drop")
+
+ggplot(vel_hora, aes(x = Hora, y = MediaVelocidad)) +
+  geom_line(color = "darkgreen", size = 1.2) +
+  geom_point(color = "black", size = 2) +
+  labs(title = "Velocidad Media por Hora del Día",
+       x = "Hora",
+       y = "Velocidad Media (km/h)") +
+  scale_x_continuous(breaks = 0:23) +
+  theme_minimal()
+
+```
+A nivel temporal se dsitribuye bastante similar a intensidad y ocupación, por lo que de nuevo no explicará nada nuevo como componente.
