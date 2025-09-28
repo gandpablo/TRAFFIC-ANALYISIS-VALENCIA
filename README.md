@@ -3,6 +3,9 @@
 Este repositorio recoge mi trabajo individual dentro del proyecto grupal **“Estudio de la calidad del aire en Valencia”** (Grado en Ciencia de Datos, UPV, curso 2024–2025).  
 Mientras el proyecto completo abordaba la relación entre **contaminación atmosférica, meteorología, emisiones de inmuebles y zonas verdes**, en este repositorio se documenta únicamente la parte centrada en el **análisis del tráfico urbano** que es la que yo realice.
 
+> **Este proyecto obtuvo la mejor calificación de la asignatura de proyecto de la promoción de Ciencia de Datos (9.9/10)**
+
+
 
 ## Descripción del trabajo
 
@@ -10,6 +13,29 @@ El objetivo principal de esta parte del estudio fue **caracterizar el tráfico e
 
 Posteriormente, estos resultados se cruzaron con contaminantes atmosféricos y factores meteorológicos en el proyecto global.  
 Sin embargo, en este repositorio se recopilan y explican exclusivamente las fases relacionadas con **procesamiento, exploración y análisis de los datos de tráfico**.
+
+El siguiente mapa muestra la ubicación de las **espiras de tráfico** en la ciudad de Valencia, evidenciando su concentración en las principales vías y avenidas:
+
+<p align="center">
+  <img src="images/mapa.png" width="600px" />
+</p>
+
+### Principales herramientas utilizadas:  
+
+<p align="center">
+  <img src="https://img.shields.io/badge/R-276DC3?style=for-the-badge&logo=r&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/pandas-150458?style=for-the-badge&logo=pandas&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/Jupyter-F37626?style=for-the-badge&logo=jupyter&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/ggplot2-276DC3?style=for-the-badge&logo=r&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/dplyr-1A162D?style=for-the-badge&logo=r&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/FactoMineR-0099CC?style=for-the-badge&logo=r&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/factoextra-33CCCC?style=for-the-badge&logo=r&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/cluster-9933FF?style=for-the-badge&logo=r&logoColor=white" height="42"/>
+  <img src="https://img.shields.io/badge/scikit--learn-F7931E?style=for-the-badge&logo=scikit-learn&logoColor=white" height="42"/>
+</p>
+
 
 ## Datos utilizados
 
