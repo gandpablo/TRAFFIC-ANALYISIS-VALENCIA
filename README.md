@@ -41,7 +41,6 @@ El siguiente mapa muestra la ubicación de las **espiras de tráfico** en la ciu
 
 Los datos de tráfico fueron facilitados por **ETRA y el Ayuntamiento de Valencia**, tras solicitud formal, ya que no son de libre difusión.  
 
-- **Cobertura**: año 2023 completo.  
 - **Granularidad original**: registros cada 5 minutos.  
 - **Número de puntos de medida**: 1.129 espiras electromagnéticas distribuidas por la ciudad.  
 - **Variables registradas**:  
